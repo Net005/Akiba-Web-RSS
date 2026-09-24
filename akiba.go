@@ -44,8 +44,29 @@ type AkibaScraper struct {
 
 const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
+// quirkJar ignores the server's "PHPSESSID=deleted" cookie clears.
+//
+// cookie_set.php sends Set-Cookie headers that delete PHPSESSID for three domain
+// variants. Python's http.cookiejar and curl keep the existing host-only session
+// cookie (the domain-scoped deletes don't match it), but Go's jar honours the
+// delete, loses the session and the site then serves the age gate instead of
+// the listing ("failed to locate .search_sam_box"). Mimic the lenient behaviour.
+type quirkJar struct{ *cookiejar.Jar }
+
+func (j quirkJar) SetCookies(u *url.URL, cs []*http.Cookie) {
+	keep := cs[:0:0]
+	for _, c := range cs {
+		if c.Name == "PHPSESSID" && (c.Value == "deleted" || c.MaxAge < 0) {
+			continue
+		}
+		keep = append(keep, c)
+	}
+	j.Jar.SetCookies(u, keep)
+}
+
 func NewAkibaScraper(base string, log *Hub) *AkibaScraper {
-	jar, _ := cookiejar.New(nil)
+	inner, _ := cookiejar.New(nil)
+	jar := quirkJar{inner}
 	a := &AkibaScraper{
 		base:   strings.TrimRight(base, "/"),
 		client: &http.Client{Jar: jar, Timeout: 30 * time.Second},
@@ -119,6 +140,16 @@ var (
 )
 
 func (a *AkibaScraper) FetchReleases(path string) ([]Release, error) {
+	out, err := a.fetchReleases(path)
+	if len(out) == 0 && err != nil && strings.Contains(err.Error(), "search_sam_box") {
+		a.log.Warn("Listing came back without release cards (age gate / lost session?) — re-priming session and retrying")
+		a.primeSession()
+		return a.fetchReleases(path)
+	}
+	return out, err
+}
+
+func (a *AkibaScraper) fetchReleases(path string) ([]Release, error) {
 	if path == "" {
 		path = "/search/?narrow=2&sort=1"
 	}
