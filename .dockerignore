@@ -1,0 +1,12 @@
+.git
+.github
+data
+config.json
+*.log
+feed.rss
+.scraper_state.json
+releases.json
+history.json
+akiba-web-rss-linux-amd64
+*.py
+requirements.txt

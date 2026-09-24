@@ -1,0 +1,16 @@
+services:
+  akiba-web-rss:
+    image: ghcr.io/net005/akiba-web-rss:latest
+    # Uncomment to build locally instead of pulling from GHCR:
+    # build: .
+    container_name: akiba-web-rss
+    restart: unless-stopped
+    ports:
+      - "5000:5000"          # must match "port" in data/config.json
+    environment:
+      TZ: Europe/Amsterdam
+    volumes:
+      # config.json, state, feed.rss, releases.json and logs all live here
+      - ./data:/data
+    # Match the owner of ./data (the image runs as uid/gid 1000 by default):
+    # user: "1000:1000"

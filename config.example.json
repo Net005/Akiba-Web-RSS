@@ -1,0 +1,15 @@
+{
+  "myjd_email": "you@example.com",
+  "myjd_password": "your-myjd-password",
+  "pushover_destinations": [],
+  "akiba_base": "https://www.akiba-web.com",
+  "akiba_releases_path": "/search/?narrow=2&sort=1",
+  "forum_base": "https://vipergirls.to",
+  "forum_thread": "threads/5913172-Heroine-superheroine-JAV-movie-collection",
+  "forum_pages": 3,
+  "port": 5000,
+  "listen_host": "0.0.0.0",
+  "schedule_interval": 3600,
+  "web_user": "admin",
+  "web_password": "change-me"
+}

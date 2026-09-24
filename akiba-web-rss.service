@@ -1,0 +1,15 @@
+[Unit]
+Description=Akiba-Web RSS control panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust to where the binary + config.json live:
+WorkingDirectory=%h/apps/giga
+ExecStart=%h/apps/giga/akiba-web-rss -config %h/apps/giga/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
