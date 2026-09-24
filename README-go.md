@@ -7,28 +7,42 @@ Drop-in replacement for `akiba_rss_server.py`. Same `config.json`, same
 
 ```sh
 chmod +x akiba-web-rss-linux-amd64
-./akiba-web-rss-linux-amd64 -config ./config.json     # then open http://<host>:<port>/
+./akiba-web-rss-linux-amd64 -data ./data     # then open http://<host>:5000/
 ```
 
-A systemd user unit is included (`akiba-web-rss.service`). Rebuild from source
-with Go 1.24+: `CGO_ENABLED=0 go build -o akiba-web-rss .` (the web UI is
-embedded in the binary).
+`-data` is the folder for `settings.json`, `auth.json`, the state file, feed and
+logs (env `AKIBA_DATA` works too). A systemd user unit is included
+(`akiba-web-rss.service`). Rebuild from source with Go 1.25+:
+`CGO_ENABLED=0 go build -o akiba-web-rss .` (the web UI is embedded).
 
 ## Docker
 
 ```sh
-mkdir -p data && cp config.example.json data/config.json   # edit it (MyJD login, web_user/web_password…)
 docker compose up -d
-docker compose logs -f
+docker compose logs -f      # first run: look for the FIRST-RUN SETUP line with your setup code
 ```
 
-The container keeps everything (`config.json`, state, `feed.rss`, logs) in the
-`./data` volume and runs as uid/gid 1000 — `chown -R 1000:1000 data` if needed.
-Panel + feed: `http://<host>:5000/` and `/giga/feed`. The port in
-`docker-compose.yml` must match `port` in `data/config.json`.
-Images are published to `ghcr.io/net005/akiba-web-rss` by GitHub Actions
-(`.github/workflows/docker.yml`): `latest` from `main`, `vX.Y.Z` from tags,
-`linux/amd64` + `linux/arm64`.
+Everything lives in the `./data` volume (uid/gid 1000 — `chown -R 1000:1000 data`).
+Images are published to `ghcr.io/net005/akiba-web-rss` by GitHub Actions.
+
+## First run, login and settings
+
+There is **no `config.json` any more** — settings are edited in the web panel
+(Settings page) and stored in `data/settings.json`.
+
+* **Existing `config.json`:** if `data/config.json` exists and there is no
+  `settings.json`, it is imported automatically on startup and renamed to
+  `config.json.imported`. (An invalid file is left untouched and reported in the log.)
+* **Account:** log in with a normal form (no browser/Windows-style basic auth
+  popup). On first run, open `/setup`, enter the one-time **setup code printed in the
+  server log**, and choose a username + password (bcrypt-hashed in `auth.json`).
+  A `web_user`/`web_password` from an imported config becomes that account.
+* **Sessions:** HttpOnly + SameSite cookie, 30 days if "keep me signed in", otherwise
+  12 h; failed logins are throttled per IP; changing the password signs out other devices.
+* **RSS feed needs no login:** `/giga/feed`, `/giga/feed/raw` and `/health` are public.
+  Everything else (panel, API, `/giga/feed/refresh|realtime`) requires a session.
+* **State file:** `.scraper_state.json` missing or unreadable → a fresh one is created
+  (a corrupt file is kept as `.scraper_state.json.corrupt-<time>`); never a startup failure.
 
 ## Control panel
 
@@ -39,11 +53,9 @@ Images are published to `ghcr.io/net005/akiba-web-rss` by GitHub Actions
 | Releases | every release with full-bleed cover art, link progress, "Send to JD", re-notify, forget state |
 | Activity | history of pipeline runs (result, matches, queued links, notifications, forum status) |
 | System | MyJDownloader devices + reconnect, Pushover test buttons, list of links already sent |
-| Settings | edit `config.json` in the browser (secrets masked, unknown keys preserved) |
+| Settings | all configuration + account password, in the browser (secrets masked) |
 
-New optional config keys: `listen_host`, `web_user`, `web_password`
-(HTTP basic auth for the panel — the RSS feed and `/health` stay public),
-`public_base_url`, `forum_retries`, `releases_file`, `history_file`.
+Extra settings: `listen_host`, `public_base_url`, `forum_retries`, `releases_file`, `history_file`.
 `schedule_interval` and MyJD credentials apply immediately; `port` /
 `listen_host` need a restart.
 

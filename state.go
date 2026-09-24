@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,8 @@ type StateStore struct {
 	mu   sync.Mutex
 	path string
 	S    State
+	// Recovered is set when Load had to replace an invalid state file.
+	Recovered string
 }
 
 func newState() State {
@@ -42,21 +45,45 @@ func NewStateStore(path string) *StateStore { return &StateStore{path: path, S: 
 
 var legacyIDRe = regexp.MustCompile(`(?i)(?:^|[/_])([A-Z]{2,8}-\d{1,4})(?:_|\.|$)`)
 
+// Load reads the state file. A missing file or one that cannot be parsed is
+// never fatal: a fresh state is (re)created instead. A corrupt file is moved
+// aside (".corrupt-<timestamp>") so nothing is silently lost.
 func (s *StateStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			s.S = newState()
+			return s.saveLocked() // create it
 		}
 		return err
 	}
+	st, perr := parseState(b, s.path)
+	if perr != nil {
+		backup := s.path + ".corrupt-" + time.Now().Format("20060102-150405")
+		if rerr := os.Rename(s.path, backup); rerr != nil {
+			backup = "(could not back up: " + rerr.Error() + ")"
+		}
+		s.S = newState()
+		if serr := s.saveLocked(); serr != nil {
+			return serr
+		}
+		s.Recovered = "state file was invalid (" + perr.Error() + "); started a new one, old file kept as " + backup
+		return nil
+	}
+	s.S = st
+	return nil
+}
+
+func parseState(b []byte, path string) (State, error) {
 	st := newState()
-	// Tolerant decode: queued_releases values may be legacy non-strings.
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return st, errors.New("empty file")
+	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
+		return st, err
 	}
 	_ = json.Unmarshal(raw["found_links"], &st.FoundLinks)
 	_ = json.Unmarshal(raw["notified_releases"], &st.NotifiedReleases)
@@ -67,7 +94,7 @@ func (s *StateStore) Load() error {
 	var q map[string]any
 	_ = json.Unmarshal(raw["queued_releases"], &q)
 	legacy := time.Now().UTC().Format(time.RFC3339Nano)
-	if fi, err := os.Stat(s.path); err == nil {
+	if fi, err := os.Stat(path); err == nil {
 		legacy = fi.ModTime().UTC().Format(time.RFC3339Nano)
 	}
 	for k, v := range q {
@@ -77,6 +104,9 @@ func (s *StateStore) Load() error {
 			st.QueuedReleases[k] = legacy
 		}
 	}
+	if st.FoundLinks == nil {
+		st.FoundLinks = map[string]bool{}
+	}
 	for link := range st.FoundLinks {
 		if m := legacyIDRe.FindStringSubmatch(link); m != nil {
 			id := strings.ToUpper(m[1])
@@ -85,14 +115,16 @@ func (s *StateStore) Load() error {
 			}
 		}
 	}
-	if st.FoundLinks == nil {
-		st.FoundLinks = map[string]bool{}
+	if st.NotifiedReleases == nil {
+		st.NotifiedReleases = map[string]string{}
+	}
+	if st.PendingNotifications == nil {
+		st.PendingNotifications = map[string]bool{}
 	}
 	if st.PushoverDeliveries == nil {
 		st.PushoverDeliveries = map[string]map[string]string{}
 	}
-	s.S = st
-	return nil
+	return st, nil
 }
 
 func (s *StateStore) saveLocked() error {

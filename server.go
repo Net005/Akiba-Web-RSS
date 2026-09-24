@@ -1,12 +1,13 @@
 package main
 
 import (
-	"crypto/subtle"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -22,11 +23,27 @@ type Server struct {
 	mux *http.ServeMux
 }
 
+// publicPath lists what needs no session: the RSS feed (readers can't log
+// in), health, the login/setup pages and their assets.
+func publicPath(p string) bool {
+	switch p {
+	case "/health", "/login", "/setup", "/login.html", "/setup.html", "/style.css",
+		"/api/auth/state", "/api/auth/login", "/api/auth/setup":
+		return true
+	}
+	if p == "/giga/feed" || strings.HasPrefix(p, "/giga/feed/") {
+		// the legacy blocking refresh endpoints trigger a scrape: keep them private
+		return !strings.HasSuffix(p, "/realtime") && !strings.HasSuffix(p, "/refresh")
+	}
+	return false
+}
+
 func NewServer(app *App) *Server {
 	s := &Server{app: app, mux: http.NewServeMux()}
 	sub, _ := fs.Sub(webFS, "web")
-	static := http.FileServer(http.FS(sub))
-	s.mux.Handle("/", static)
+	s.mux.Handle("/", http.FileServer(http.FS(sub)))
+	s.mux.HandleFunc("/login", s.page("login.html"))
+	s.mux.HandleFunc("/setup", s.page("setup.html"))
 
 	// Public, backwards-compatible endpoints (RSS readers, monitoring).
 	s.mux.HandleFunc("/giga/feed", s.feed)
@@ -34,12 +51,16 @@ func NewServer(app *App) *Server {
 	s.mux.HandleFunc("/giga/feed/raw", s.feedRaw)
 	s.mux.HandleFunc("/health", s.health)
 
-	// Legacy blocking refresh endpoints (now protected when auth is on).
+	// Legacy blocking refresh endpoints (session required).
 	s.mux.HandleFunc("/giga/feed/realtime", s.legacyRefresh(true))
 	s.mux.HandleFunc("/giga/feed/refresh", s.legacyRefresh(false))
 
-	// Control API.
 	api := map[string]http.HandlerFunc{
+		"GET /api/auth/state":      s.authState,
+		"POST /api/auth/login":     s.login,
+		"POST /api/auth/setup":     s.setup,
+		"POST /api/auth/logout":    s.logout,
+		"POST /api/auth/password":  s.changePassword,
 		"GET /api/status":          s.status,
 		"GET /api/releases":        s.releases,
 		"GET /api/history":         s.history,
@@ -63,32 +84,69 @@ func NewServer(app *App) *Server {
 	return s
 }
 
+func (s *Server) page(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b, err := webFS.ReadFile("web/" + name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(b)
+	}
+}
+
+type ctxKey int
+
+const userKey ctxKey = 1
+
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := s.app.cfg.Get()
-		public := r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/giga/feed") && !strings.HasSuffix(r.URL.Path, "/realtime") && !strings.HasSuffix(r.URL.Path, "/refresh")
-		if c.WebUser != "" && !public {
-			u, p, ok := r.BasicAuth()
-			if !ok ||
-				subtle.ConstantTimeCompare([]byte(u), []byte(c.WebUser)) != 1 ||
-				subtle.ConstantTimeCompare([]byte(p), []byte(c.WebPassword)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Akiba-Web RSS"`)
-				http.Error(w, "authentication required", http.StatusUnauthorized)
-				return
-			}
-		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
+			h.Set("Cache-Control", "no-store")
 			// CSRF guard for state-changing requests: same-origin only.
 			if r.Method == http.MethodPost {
-				if o := r.Header.Get("Origin"); o != "" {
-					if !strings.HasSuffix(o, "://"+r.Host) {
-						http.Error(w, "cross-origin request refused", http.StatusForbidden)
-						return
-					}
+				if o := r.Header.Get("Origin"); o != "" && !strings.HasSuffix(o, "://"+r.Host) {
+					jerr(w, http.StatusForbidden, "cross-origin request refused")
+					return
 				}
 			}
+		}
+		user, authed := s.sessionUser(r)
+		if authed {
+			r = r.WithContext(context.WithValue(r.Context(), userKey, user))
+		}
+		p := r.URL.Path
+		switch {
+		case publicPath(p):
+			// signed-in users have no business on the login page
+			if authed && (p == "/login" || p == "/login.html") {
+				http.Redirect(w, r, "/", http.StatusFound)
+				return
+			}
+		case authed:
+		case !s.app.auth.HasUser():
+			if strings.HasPrefix(p, "/api/") {
+				jerr(w, http.StatusUnauthorized, "setup required")
+			} else {
+				http.Redirect(w, r, "/setup", http.StatusFound)
+			}
+			return
+		case strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/giga/"):
+			jerr(w, http.StatusUnauthorized, "authentication required")
+			return
+		default:
+			next := ""
+			if r.Method == http.MethodGet && p != "/" {
+				next = "?next=" + url.QueryEscape(r.URL.RequestURI())
+			}
+			http.Redirect(w, r, "/login"+next, http.StatusFound)
+			return
 		}
 		s.mux.ServeHTTP(w, r)
 	})
@@ -200,7 +258,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"forum_max_page": forumPage,
 		"feed_age":       s.feedAge().Seconds(),
 		"interval":       c.ScheduleInterval,
-		"auth":           c.WebUser != "",
+		"user":           r.Context().Value(userKey),
+		"imported":       s.app.Imported,
+		"needs_myjd":     c.MyJDEmail == "" || c.MyJDPassword == "",
 	})
 }
 
@@ -343,7 +403,8 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	after := s.app.cfg.Get()
-	s.app.log.Info("⚙️ Configuration saved from control panel")
+	s.app.MarkConfigured()
+	s.app.log.Info("⚙️ Settings saved")
 	restart := before.Port != after.Port || before.ListenHost != after.ListenHost ||
 		before.LogFile != after.LogFile || before.StateFile != after.StateFile
 	if before.ScheduleInterval != after.ScheduleInterval {

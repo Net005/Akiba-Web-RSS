@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Adjust to where the binary + config.json live:
 WorkingDirectory=%h/apps/giga
-ExecStart=%h/apps/giga/akiba-web-rss -config %h/apps/giga/config.json
+ExecStart=%h/apps/giga/akiba-web-rss -data %h/apps/giga
 Restart=on-failure
 RestartSec=5
 

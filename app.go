@@ -68,15 +68,40 @@ type App struct {
 
 	kick chan struct{} // reschedule scheduler
 	trig chan string   // manual/feed triggers
+
+	auth      *AuthStore
+	limit     *limiter
+	setupCode string // one-time code printed to the log while no account exists
+	ready     chan struct{}
+	readyOnce sync.Once
+	Imported  bool // a legacy config.json was imported at startup
 }
+
+// MarkConfigured releases the startup gate once settings exist.
+func (a *App) MarkConfigured() { a.readyOnce.Do(func() { close(a.ready) }) }
+
+// WaitConfigured blocks until settings.json exists (setup finished/imported).
+func (a *App) WaitConfigured() { <-a.ready }
 
 func NewApp(cfg *ConfigStore, log *Hub) *App {
 	c := cfg.Get()
-	return &App{
+	app := &App{
 		cfg: cfg, log: log, st: NewStateStore(c.StateFile), push: NewPushoverSender(),
 		start: time.Now(), jd: NewMyJD(),
 		kick: make(chan struct{}, 1), trig: make(chan string, 4),
+		auth: NewAuthStore(filepath.Join(cfg.dir, "auth.json")), limit: newLimiter(),
+		ready: make(chan struct{}),
 	}
+	if err := app.auth.Load(); err != nil {
+		log.Error("auth.json could not be read: %v", err)
+	}
+	if !app.auth.HasUser() {
+		app.setupCode = randomCode()
+	}
+	if cfg.Exists() {
+		app.MarkConfigured()
+	}
+	return app
 }
 
 // ── persistence of releases + history ─────────────────────────────
@@ -109,6 +134,19 @@ func writeJSONFile(path string, v any) {
 	tmp := path + ".tmp"
 	if os.WriteFile(tmp, b, 0o644) == nil {
 		_ = os.Rename(tmp, path)
+	}
+}
+
+// loadState (re)loads the state file. Never fatal: a missing or invalid file
+// is replaced by a fresh state.
+func (a *App) loadState() {
+	if err := a.st.Load(); err != nil {
+		a.log.Error("State load failed: %v", err)
+		return
+	}
+	if r := a.st.Recovered; r != "" {
+		a.log.Warn("⚠️ %s", r)
+		a.st.Recovered = ""
 	}
 }
 
@@ -388,9 +426,7 @@ func (a *App) RunPipeline(reason string) bool {
 func (a *App) runPipeline(rec *RunRecord) error {
 	c := a.cfg.Get()
 	a.log.Info("═══ Pipeline run started (%s) ═══", rec.Reason)
-	if err := a.st.Load(); err != nil {
-		a.log.Error("State load failed: %v", err)
-	}
+	a.loadState()
 	var n int
 	a.st.Read(func(s *State) { n = len(s.FoundLinks) })
 	a.log.Info("Loaded state: %d previously found", n)
@@ -599,7 +635,7 @@ func (a *App) QueueRelease(id string) (int, error) {
 		return 0, errors.New("pipeline is running; try again when it is idle")
 	}
 	defer a.runMu.Unlock()
-	_ = a.st.Load()
+	a.loadState()
 	var pending []string
 	a.st.Read(func(s *State) {
 		for _, l := range rec.Links {
@@ -628,7 +664,7 @@ func (a *App) ForgetRelease(id string, links bool, notify bool) error {
 		return errors.New("pipeline is running; try again when it is idle")
 	}
 	defer a.runMu.Unlock()
-	_ = a.st.Load()
+	a.loadState()
 	err := a.st.With(func(s *State) {
 		if links {
 			delete(s.QueuedReleases, id)
@@ -658,7 +694,7 @@ func (a *App) Renotify(id string) (bool, error) {
 		return false, errors.New("pipeline is running; try again when it is idle")
 	}
 	defer a.runMu.Unlock()
-	_ = a.st.Load()
+	a.loadState()
 	_ = a.st.With(func(s *State) {
 		delete(s.NotifiedReleases, id)
 		delete(s.PushoverDeliveries, id)

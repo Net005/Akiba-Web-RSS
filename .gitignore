@@ -1,5 +1,9 @@
 # secrets + runtime data — never commit
 config.json
+config.json.imported*
+settings.json
+auth.json
+.scraper_state.json.corrupt-*
 data/
 .scraper_state.json
 *.log
@@ -12,3 +16,4 @@ history.json
 akiba-web-rss
 akiba-web-rss-linux-amd64
 .nfs*
+**/.nfs*

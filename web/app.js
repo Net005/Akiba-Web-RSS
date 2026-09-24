@@ -15,6 +15,7 @@ async function api(path, opts = {}) {
   if (opts.body && typeof opts.body !== "string") { o.body = JSON.stringify(opts.body); o.headers["Content-Type"] = "application/json"; }
   const r = await fetch(path, o);
   let j = null; try { j = await r.json(); } catch {}
+  if (r.status === 401 && !path.startsWith("/api/auth/")) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash); throw new Error("signed out"); }
   if (!r.ok) throw new Error((j && j.error) || r.statusText);
   return j;
 }
@@ -29,14 +30,15 @@ async function act(fn, okMsg) {
 const fmtDur = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h ${m}m` : m ? `${m}m ${x}s` : `${x}s`; };
 const ago = iso => iso ? fmtDur((Date.now() - new Date(iso)) / 1000) + " ago" : "—";
 const when = iso => iso ? new Date(iso).toLocaleString() : "—";
-document.body.classList.toggle("blur", store.get("blur", true));
 
 /* ───────────── status polling ───────────── */
 let status = null;
 async function pollStatus() {
   try { status = await api("/api/status"); } catch { status = null; }
   paintPill(); if (page.status) page.status();
+  $("#who").textContent = status && status.user ? status.user : "";
 }
+$("#btnOut").onclick = async () => { try { await api("/api/auth/logout", { method: "POST", body: {} }); } catch {} location.href = "/login"; };
 function paintPill() {
   const p = $("#pill"), b = $("#btnRun");
   if (!status) { p.className = "pill"; $("span", p).textContent = "offline"; b.disabled = true; return; }
@@ -55,7 +57,7 @@ let lastLogId = 0, sse = null, paused = false, pausedQueue = [];
 function connectSSE() {
   sse = new EventSource("/api/logs/stream?since=" + lastLogId);
   sse.onopen = () => $("#logdot").className = "dot on";
-  sse.onerror = () => $("#logdot").className = "dot off";
+  sse.onerror = () => { $("#logdot").className = "dot off"; fetch("/api/auth/state").then(r => r.json()).then(s => { if (!s.authenticated) location.href = "/login"; }).catch(() => {}); };
   sse.onmessage = ev => {
     const e = JSON.parse(ev.data); lastLogId = e.id;
     if (paused) { pausedQueue.push(e); page.logPaused && page.logPaused(pausedQueue.length); return; }
@@ -139,7 +141,8 @@ function dashboard() {
       <dt>MyJDownloader</dt><dd>${status.jd.connected ? '<span class="tag ok">connected</span>' : `<span class="tag err">${status.jd.has_credentials ? "offline" : "no credentials"}</span>`}</dd>
       <dt>Pushover targets</dt><dd>${status.pushover}</dd>
       <dt>Schedule</dt><dd>every ${fmtDur(status.interval)}</dd>
-      <dt>Panel auth</dt><dd>${status.auth ? '<span class="tag ok">password</span>' : '<span class="tag warn">open</span>'}</dd>`;
+      <dt>Signed in as</dt><dd>${esc(status.user || "")}</dd>
+      <dt>RSS feed</dt><dd><span class="tag ok">public, no login</span></dd>`;
   };
   page.status();
 }
@@ -187,14 +190,11 @@ function logPage() {
 const STATE = { queued: ["ok", "queued"], partial: ["warn", "partial"], waiting: ["gold", "waiting"], nolinks: ["", "no links"] };
 function releases() {
   view.innerHTML = `
-  <div class="page-h"><div><h1>Releases</h1><hr class="rule"><p>Everything in the feed, with its download and notification state.</p></div>
-    <label class="row mute"><input type="checkbox" id="rBlur"> privacy blur (hover to reveal)</label></div>
+  <div class="page-h"><div><h1>Releases</h1><hr class="rule"><p>Everything in the feed, with its download and notification state.</p></div></div>
   <div class="tools"><input type="search" id="rq" placeholder="Search ID, title, actress…">
     <select id="rf" style="width:auto"><option value="">All states</option><option value="queued">Queued</option><option value="partial">Partial</option><option value="waiting">Waiting</option><option value="nolinks">No links</option></select>
     <span class="dim" id="rc"></span></div>
   <div class="rgrid" id="rg"></div>`;
-  $("#rBlur").checked = store.get("blur", true);
-  $("#rBlur").onchange = e => { store.set("blur", e.target.checked); document.body.classList.toggle("blur", e.target.checked); };
   let data = [];
   const draw = () => {
     const q = $("#rq").value.toLowerCase(), st = $("#rf").value;
@@ -227,7 +227,7 @@ function releases() {
 }
 function detail(r, reload) {
   const d = r.detail, m = document.createElement("div"); m.className = "modal";
-  m.innerHTML = `<div class="box"><div class="row sp"><h2>${esc(r.id)} <span class="tag ${(STATE[r.state] || [""])[0]}">${(STATE[r.state] || ["", r.state])[1]}</span></h2><button class="btn sm" data-x>Close</button></div>
+  m.innerHTML = `<div class="box">${(d.cover || r.thumbnail) ? `<div class="mhero" style="background-image:url('${esc(d.cover || r.thumbnail)}')"></div>` : ""}<div class="row sp"><h2>${esc(r.id)} <span class="tag ${(STATE[r.state] || [""])[0]}">${(STATE[r.state] || ["", r.state])[1]}</span></h2><button class="btn sm" data-x>Close</button></div>
     <p style="margin:8px 0 14px">${esc(d.title)}</p>
     <dl class="kv" style="margin-bottom:14px"><dt>Actress</dt><dd>${esc(d.actress)}</dd><dt>Director</dt><dd>${esc(d.director)}</dd><dt>Duration</dt><dd>${esc(d.duration)}</dd><dt>Release date</dt><dd>${esc(d.release_date)}</dd>
       <dt>Queued in JD</dt><dd>${r.queued_at ? when(r.queued_at) : "—"}</dd><dt>Notified</dt><dd>${r.notified_at ? when(r.notified_at) : "—"}</dd></dl>
@@ -290,8 +290,17 @@ function system() {
 /* ───────────── settings ───────────── */
 const MASK = "••••••••";
 function settings() {
-  view.innerHTML = `<div class="page-h"><div><h1>Settings</h1><hr class="rule"><p>Edits <span class="mono">config.json</span>. Secrets stay masked; leave them untouched to keep the current value.</p></div>
-    <button class="btn primary" id="cSave">Save changes</button></div><div id="cf">Loading…</div>`;
+  view.innerHTML = `<div class="page-h"><div><h1>Settings</h1><hr class="rule"><p>Stored in <span class="mono">settings.json</span> in the data folder. Secrets stay masked; leave them untouched to keep the current value.</p></div>
+    <button class="btn primary" id="cSave">Save changes</button></div><div id="banner"></div><div id="cf">Loading…</div>`;
+  const banner = () => {
+    if (!status) return;
+    const msgs = [];
+    if (status.imported) msgs.push("Your existing <span class='mono'>config.json</span> was imported and renamed to <span class='mono'>config.json.imported</span>. Settings now live here.");
+    if (status.needs_myjd) msgs.push("MyJDownloader isn't set up yet — add your login below and save to start queueing links.");
+    const html = msgs.map(m => `<div class="banner">${m}</div>`).join("");
+    if ($("#banner") && $("#banner").innerHTML !== html) $("#banner").innerHTML = html;
+  };
+  banner(); page.status = banner;
   api("/api/config").then(c => {
     const F = (k, label, o = {}) => `<label class="f"><span>${label}</span><input data-k="${k}" type="${o.type || "text"}" value="${esc(c[k] ?? "")}" ${o.ph ? `placeholder="${o.ph}"` : ""}>${o.h ? `<small>${o.h}</small>` : ""}</label>`;
     $("#cf").innerHTML = `<div class="grid g2">
@@ -300,7 +309,10 @@ function settings() {
       <div class="card"><h3>Schedule &amp; server</h3><div class="two">${F("schedule_interval", "Interval (seconds)", { type: "number" })}${F("port", "Port", { type: "number", h: "restart required" })}</div>
         ${F("listen_host", "Listen address", { h: "0.0.0.0 = all interfaces · restart required" })}${F("public_base_url", "Public URL (RSS channel link)", { ph: "http://host:5000/" })}</div>
       <div class="card"><h3>MyJDownloader</h3>${F("myjd_email", "Email")}${F("myjd_password", "Password", { type: "password" })}</div>
-      <div class="card"><h3>Control panel access</h3>${F("web_user", "Username", { h: "empty = no password. The RSS feed and /health always stay public." })}${F("web_password", "Password", { type: "password" })}</div>
+      <div class="card"><h3>Account</h3><p class="mute" style="margin-top:0">Signed in as <b>${esc(status?.user || "")}</b>. The RSS feed and <span class="mono">/health</span> never require a login.</p>
+        <label class="f"><span>Current password</span><input id="pwCur" type="password" autocomplete="current-password"></label>
+        <label class="f"><span>New password</span><input id="pwNew" type="password" autocomplete="new-password" minlength="8"></label>
+        <button class="btn" id="pwGo">Change password</button><small class="dim" style="display:block;margin-top:8px">Other devices are signed out when you change it.</small></div>
     </div>
     <div class="sec"><h2>Pushover</h2></div><div class="card"><div id="pd"></div><button class="btn sm" id="pAdd">+ Add destination</button></div>`;
     const dests = JSON.parse(JSON.stringify(c.pushover_destinations || []));
@@ -313,6 +325,10 @@ function settings() {
     $("#pd").oninput = e => { const r = e.target.closest("[data-i]"), f = e.target.dataset.f; if (r && f) dests[+r.dataset.i][f] = e.target.type === "checkbox" ? e.target.checked : e.target.value; };
     $("#pd").onclick = e => { const b = e.target.closest("[data-rm]"); if (b) { dests.splice(+b.dataset.rm, 1); pd(); } };
     $("#pAdd").onclick = () => { dests.push({ api_token: "", user_key: "", include_sensitive_data: false }); pd(); };
+    $("#pwGo").onclick = async () => {
+      const r = await act(() => api("/api/auth/password", { body: { current: $("#pwCur").value, new: $("#pwNew").value } }), "Password changed");
+      if (r) { $("#pwCur").value = ""; $("#pwNew").value = ""; }
+    };
     $("#cSave").onclick = async () => {
       const patch = {};
       $$("#cf [data-k]").forEach(i => { patch[i.dataset.k] = i.type === "number" ? (i.value === "" ? 0 : +i.value) : i.value; });

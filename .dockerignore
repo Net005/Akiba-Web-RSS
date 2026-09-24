@@ -2,6 +2,9 @@
 .github
 data
 config.json
+config.json.imported*
+settings.json
+auth.json
 *.log
 feed.rss
 .scraper_state.json

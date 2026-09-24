@@ -48,9 +48,10 @@ func TestStateMigratesLegacyFile(t *testing.T) {
 }
 
 func TestConfigPreservesUnknownKeysAndSecrets(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.json")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "settings.json")
 	os.WriteFile(p, []byte(`{"myjd_email":"a@b.c","myjd_password":"secret","custom":1,"port":5000}`), 0o600)
-	cs, err := LoadConfig(p)
+	cs, err := LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,13 +104,13 @@ func TestPipelineEndToEnd(t *testing.T) {
 	defer forum.Close()
 
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.json")
+	cfgPath := filepath.Join(dir, "settings.json")
 	b, _ := json.Marshal(map[string]any{
 		"akiba_base": akiba.URL, "forum_base": forum.URL, "forum_thread": "threads/t", "forum_pages": 2,
 		"forum_retries": 3, "port": 0,
 	})
 	os.WriteFile(cfgPath, b, 0o600)
-	cs, err := LoadConfig(cfgPath)
+	cs, err := LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

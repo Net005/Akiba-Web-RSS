@@ -19,6 +19,6 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["/usr/local/bin/akiba-web-rss", "-healthcheck", "-config", "/data/config.json"]
+  CMD ["/usr/local/bin/akiba-web-rss", "-healthcheck", "-data", "/data"]
 ENTRYPOINT ["/usr/local/bin/akiba-web-rss"]
-CMD ["-config", "/data/config.json"]
+CMD ["-data", "/data"]

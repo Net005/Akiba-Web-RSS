@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // PushoverDest is one Pushover delivery target.
@@ -34,21 +35,31 @@ type Config struct {
 
 	// New in the Go version (all optional).
 	ListenHost    string `json:"listen_host"`     // default 0.0.0.0
-	WebUser       string `json:"web_user"`        // enables HTTP basic auth on the control UI
-	WebPassword   string `json:"web_password"`    //
 	PublicBaseURL string `json:"public_base_url"` // used as channel link in RSS
 	ForumRetries  int    `json:"forum_retries"`   // attempts per forum request (default 4)
 	ReleasesFile  string `json:"releases_file"`   // cache of scraped release metadata
 	HistoryFile   string `json:"history_file"`    // pipeline run history
 }
 
-// ConfigStore holds the live config and knows how to persist it back while
-// preserving unknown keys.
+// ConfigStore holds the live settings (settings.json, edited from the web UI)
+// and persists them while preserving unknown keys.
 type ConfigStore struct {
-	mu   sync.RWMutex
-	path string
-	dir  string
-	cfg  Config
+	mu     sync.RWMutex
+	path   string
+	dir    string
+	cfg    Config
+	exists bool
+}
+
+const settingsName = "settings.json"
+const legacyConfigName = "config.json"
+
+// Exists reports whether settings.json has been created (setup completed or
+// a legacy config.json was imported).
+func (cs *ConfigStore) Exists() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.exists
 }
 
 func defaultConfig(dir string) Config {
@@ -93,8 +104,10 @@ func (c *Config) resolve(dir string) {
 	}
 }
 
-func LoadConfig(path string) (*ConfigStore, error) {
-	dir := filepath.Dir(path)
+// LoadConfig loads <dir>/settings.json. A missing file is not an error: the
+// defaults are used and Exists() is false until settings are first saved.
+func LoadConfig(dir string) (*ConfigStore, error) {
+	path := filepath.Join(dir, settingsName)
 	cs := &ConfigStore{path: path, dir: dir, cfg: defaultConfig(dir)}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -105,9 +118,9 @@ func LoadConfig(path string) (*ConfigStore, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(b, &cs.cfg); err != nil {
-		// Same behaviour as the Python version: refuse to start on a bad file.
-		return nil, fmt.Errorf("config load failed for %s: %w (refusing to start with blank fallback credentials)", path, err)
+		return nil, fmt.Errorf("%s is not valid JSON: %w", path, err)
 	}
+	cs.exists = true
 	cs.cfg.resolve(dir)
 	return cs, nil
 }
@@ -152,6 +165,7 @@ func (cs *ConfigStore) Update(patch map[string]any) error {
 	}
 	next.resolve(cs.dir)
 	out, _ := json.MarshalIndent(m, "", "  ")
+	_ = os.MkdirAll(cs.dir, 0o755)
 	tmp := cs.path + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return err
@@ -160,12 +174,13 @@ func (cs *ConfigStore) Update(patch map[string]any) error {
 		return err
 	}
 	cs.cfg = next
+	cs.exists = true
 	return nil
 }
 
 const secretMask = "••••••••"
 
-var secretKeys = map[string]bool{"myjd_password": true, "web_password": true}
+var secretKeys = map[string]bool{"myjd_password": true}
 
 // mergePushover keeps existing secrets when the UI sends masked values.
 func mergePushover(old, nu any) any {
@@ -225,4 +240,56 @@ func (cs *ConfigStore) Redacted() map[string]any {
 		}
 	}
 	return m
+}
+
+// ImportLegacyConfig migrates an old <dir>/config.json (Python or earlier Go
+// version) into settings.json + auth.json and renames it to
+// config.json.imported. It does nothing if settings.json already exists or
+// there is no config.json. An invalid config.json is left untouched and
+// reported as an error.
+func ImportLegacyConfig(dir string, log *Hub) (bool, error) {
+	settings := filepath.Join(dir, settingsName)
+	legacy := filepath.Join(dir, legacyConfigName)
+	if _, err := os.Stat(settings); err == nil {
+		return false, nil
+	}
+	b, err := os.ReadFile(legacy)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return false, fmt.Errorf("found %s but it is not valid JSON (%v); leaving it alone — fix it or delete it and use the setup page", legacy, err)
+	}
+	user, _ := m["web_user"].(string)
+	pass, _ := m["web_password"].(string)
+	delete(m, "web_user")
+	delete(m, "web_password")
+	out, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(settings, out, 0o600); err != nil {
+		return false, err
+	}
+	if user != "" && pass != "" {
+		auth := NewAuthStore(filepath.Join(dir, "auth.json"))
+		_ = auth.Load()
+		if !auth.HasUser() {
+			if err := auth.SetUser(user, pass); err != nil {
+				log.Warn("Could not import web login from config.json (%v) — you will be asked to create an account", err)
+			} else {
+				log.Info("Imported web login %q from config.json", user)
+			}
+		}
+	}
+	target := legacy + ".imported"
+	if _, err := os.Stat(target); err == nil {
+		target = legacy + ".imported-" + time.Now().Format("20060102-150405")
+	}
+	if err := os.Rename(legacy, target); err != nil {
+		return true, fmt.Errorf("imported, but could not rename %s: %w", legacy, err)
+	}
+	log.Info("Imported %s into %s and renamed it to %s", legacyConfigName, settingsName, filepath.Base(target))
+	return true, nil
 }

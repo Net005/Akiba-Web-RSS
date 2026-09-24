@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0a0509">
+<title>Akiba-Web · Setup</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%230a0509%27/%3E%3Cpath d=%27M16 26C7 19 6 13 9.5 10.2c2.6-2 5.2-.6 6.5 1.6 1.3-2.2 3.900-3.600 6.500-1.600C26 13 25 19 16 26z%27 fill=%27%23e0245e%27/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css"></head><body><div class="veil"></div>
+<main class="auth"><form class="auth-card" id="f" autocomplete="on">
+<div class="auth-logo"><svg viewBox="0 0 32 32" width="44" height="44" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5c8a"/><stop offset="1" stop-color="#b3123f"/></linearGradient></defs><path d="M16 27C6.500 19.500 5 13 9 9.800c2.800-2.200 5.700-.7 7 1.700 1.300-2.400 4.200-3.900 7-1.700C27 13 25.500 19.500 16 27z" fill="url(#g)"/></svg><span class="brand-t"><b>AKIBA</b><i>·</i>WEB</span></div>
+<h1>First-time setup</h1><p class="sub">Create your administrator account</p>
+<label class="f"><span>Setup code</span><input id="c" autocomplete="off" placeholder="XXXX-XXXX" required><small>Shown in the server log (<span class="mono">docker compose logs akiba-web-rss</span>).</small></label>
+<label class="f"><span>Username</span><input id="u" autocomplete="username" required></label>
+<label class="f"><span>Password</span><input id="p" type="password" autocomplete="new-password" minlength="8" required><small>At least 8 characters.</small></label>
+<label class="f"><span>Repeat password</span><input id="p2" type="password" autocomplete="new-password" required></label>
+<button class="btn primary" id="go" type="submit">Create account</button>
+<div class="auth-err" id="e" role="alert"></div>
+<div class="auth-foot">You'll add MyJDownloader, Pushover and forum settings next, right in the panel.</div>
+</form></main>
+<script>
+const e=document.getElementById('e');
+fetch('/api/auth/state').then(r=>r.json()).then(s=>{ if(!s.needs_setup) location.replace('/login'); }).catch(()=>{});
+document.getElementById('f').onsubmit=async ev=>{
+  ev.preventDefault(); e.textContent='';
+  if(p.value!==p2.value){ e.textContent='Passwords do not match'; return; }
+  const b=document.getElementById('go'); b.disabled=true;
+  try{
+    const r=await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c.value,username:u.value,password:p.value})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||'Setup failed');
+    location.replace('/#/settings');
+  }catch(x){ e.textContent=x.message; b.disabled=false; }
+};
+const c=document.getElementById('c'),u=document.getElementById('u'),p=document.getElementById('p'),p2=document.getElementById('p2');
+</script></body></html>
