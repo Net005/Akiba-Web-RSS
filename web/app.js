@@ -200,10 +200,17 @@ $('#relGrid').addEventListener('click', e => {
   const r = releasesCache.find(x => String(x.id) === t.dataset.id);
   if (r) openReleaseModal(r);
 });
+// The site's own description text ends in a trailing "show more/close"
+// toggle label (e.g. "▲Close" or "▲閉じる") that only makes sense inside
+// their own expand/collapse widget - strip it so it doesn't leak into ours.
+function cleanStory(s) {
+  return (s || '').replace(/[\s　]*[▲▼]\s*(close|閉じる|とじる)\s*$/i, '').trim();
+}
 function openReleaseModal(r) {
   const d = r.detail || {};
   const cover = relCover(r);
   const shots = d.screenshots || [];
+  const story = cleanStory(d.story);
   const info = [
     ['State', `<span class="tag st-${esc(r.state)}">${esc(r.state)}</span>`],
     ['Links queued', `${r.links_queued||0} / ${r.links_total||0}`],
@@ -215,11 +222,14 @@ function openReleaseModal(r) {
     ['Notified', r.notified_at ? esc(fmtDT(r.notified_at)) : 'not yet'],
   ];
   $('#mTitle').textContent = relTitle(r);
+  $('#modalBox').classList.add('wide');
   $('#mBody').innerHTML = `
-    ${cover ? `<img src="${esc(cover)}" style="max-width:100%;max-height:420px;display:block;margin:0 auto 14px;border-radius:6px;border:1px solid var(--line)">` : ''}
-    <div class="kv">${info.map(([k, v]) => `<div class="krow"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`).join('')}</div>
-    ${d.story ? `<h4>Story</h4><p style="white-space:pre-wrap">${esc(d.story)}</p>` : ''}
-    ${shots.length ? `<h4>Screenshots</h4><div class="shots">${shots.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="${esc(u)}"></a>`).join('')}</div>` : ''}
+    <div class="rd-top">
+      ${cover ? `<img class="rd-cover" src="${esc(cover)}">` : '<div class="rd-cover"></div>'}
+      <div class="rd-info">${info.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${v}</span>`).join('')}</div>
+    </div>
+    ${story ? `<h4>Story</h4><p class="rd-story">${esc(story)}</p>` : ''}
+    ${shots.length ? `<h4>Screenshots</h4><div class="shots rd-shots">${shots.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="${esc(u)}"></a>`).join('')}</div>` : ''}
     <div class="btnrow" style="margin-top:14px">
       <a class="btn sm" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open thread</a>
       <button class="btn primary sm" data-act="queue">Send to JD</button>
@@ -234,7 +244,7 @@ function openReleaseModal(r) {
   });
   $('#modal').hidden = false;
 }
-function closeModal() { $('#modal').hidden = true; }
+function closeModal() { $('#modal').hidden = true; $('#modalBox').classList.remove('wide'); }
 $('#mClose').addEventListener('click', closeModal);
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeModal(); });

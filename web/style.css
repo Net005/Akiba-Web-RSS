@@ -134,12 +134,24 @@ td .st-ok{color:var(--ok)}td .st-error,td .st-false{color:var(--err)}td .st-warn
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:4vh 14px;overflow:auto}
 .modal[hidden]{display:none}
 .modal-box{background:var(--panel);border:1px solid var(--line2);border-top:3px solid var(--accent);border-radius:var(--radius);width:min(920px,100%)}
+.modal-box.wide{width:min(1080px,96vw)}
 .modal-h{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--panel2);font-weight:700;font-size:15px;color:#fff}
 .x{background:none;border:0;color:#aaa;font-size:26px;line-height:1;cursor:pointer}.x:hover{color:#fff}
 .modal-b{padding:16px}
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:12px 0}
 .shots img{width:100%;height:100px;object-fit:cover;border-radius:3px;border:1px solid var(--line);cursor:zoom-in;background:#000}
 h4{margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent)}
+
+/* release detail modal */
+.rd-top{display:grid;grid-template-columns:200px 1fr;gap:16px}
+@media(max-width:640px){.rd-top{grid-template-columns:1fr}}
+.rd-cover{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:#0c0a0b}
+.rd-info{display:grid;grid-template-columns:1fr 1fr;gap:5px 16px;font-size:13px;align-content:start}
+.rd-info .k{color:var(--muted)}.rd-info .v{color:#fff}
+@media(max-width:520px){.rd-info{grid-template-columns:1fr}}
+.rd-story{max-height:110px;overflow:auto;margin:0;font-size:13px;line-height:1.5;color:#ddd0d5}
+.shots.rd-shots{max-height:220px;overflow:auto;grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+.shots.rd-shots img{height:80px}
 
 .toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
 .toast{background:#221a1e;border:1px solid var(--line2);border-left:4px solid var(--ok);padding:10px 14px;border-radius:var(--radius);box-shadow:0 4px 18px #000a;max-width:360px;font-size:13px;animation:in .2s}
