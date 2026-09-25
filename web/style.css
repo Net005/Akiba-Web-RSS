@@ -121,7 +121,7 @@ td .st-ok{color:var(--ok)}td .st-error,td .st-false{color:var(--err)}td .st-warn
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;cursor:pointer;display:flex;flex-direction:column;transition:transform .12s,border-color .12s}
 .tile:hover{transform:translateY(-2px);border-color:var(--accent)}
-.tile .cv{aspect-ratio:16/10;background:#0c0a0b center/cover no-repeat;position:relative}
+.tile .cv{aspect-ratio:3/4;background:#0c0a0b center top/cover no-repeat;position:relative}
 .tile .cv .n{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.75);font-size:11px;padding:1px 6px;border-radius:3px}
 .tile .cv .bad{position:absolute;left:6px;top:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;color:#fff}
 .tile .tb{padding:9px 11px}

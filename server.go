@@ -35,6 +35,10 @@ func publicPath(p string) bool {
 		// the legacy blocking refresh endpoints trigger a scrape: keep them private
 		return !strings.HasSuffix(p, "/realtime") && !strings.HasSuffix(p, "/refresh")
 	}
+	// cached cover/thumbnail images are referenced from the (public) RSS feed
+	if strings.HasPrefix(p, "/covers/") {
+		return true
+	}
 	return false
 }
 
@@ -44,6 +48,7 @@ func NewServer(app *App) *Server {
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
 	s.mux.HandleFunc("/login", s.page("login.html"))
 	s.mux.HandleFunc("/setup", s.page("setup.html"))
+	s.mux.Handle("/covers/", http.StripPrefix("/covers/", http.FileServer(http.Dir(app.coversDir))))
 
 	// Public, backwards-compatible endpoints (RSS readers, monitoring).
 	s.mux.HandleFunc("/giga/feed", s.feed)

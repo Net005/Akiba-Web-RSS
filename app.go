@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -75,6 +77,8 @@ type App struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 	Imported  bool // a legacy config.json was imported at startup
+
+	coversDir string // local cache of cover/thumbnail images, served at /covers/
 }
 
 // MarkConfigured releases the startup gate once settings exist.
@@ -85,12 +89,17 @@ func (a *App) WaitConfigured() { <-a.ready }
 
 func NewApp(cfg *ConfigStore, log *Hub) *App {
 	c := cfg.Get()
+	coversDir := filepath.Join(cfg.dir, "covers")
+	if err := os.MkdirAll(coversDir, 0o755); err != nil {
+		log.Warn("Could not create cover cache directory %s: %v", coversDir, err)
+	}
 	app := &App{
 		cfg: cfg, log: log, st: NewStateStore(c.StateFile), push: NewPushoverSender(),
 		start: time.Now(), jd: NewMyJD(),
 		kick: make(chan struct{}, 1), trig: make(chan string, 4),
 		auth: NewAuthStore(filepath.Join(cfg.dir, "auth.json")), limit: newLimiter(),
-		ready: make(chan struct{}),
+		ready:     make(chan struct{}),
+		coversDir: coversDir,
 	}
 	if err := app.auth.Load(); err != nil {
 		log.Error("auth.json could not be read: %v", err)
@@ -516,9 +525,13 @@ func (a *App) runPipeline(rec *RunRecord) error {
 		if ferr != nil && haveOld {
 			links = old.Links
 		}
+		if detail.Cover != "" {
+			detail.Cover = a.cacheImage(rel.ID, "cover", detail.Cover)
+		}
+		thumb := a.cacheImage(rel.ID, "thumb", rel.Thumbnail)
 		rssTitle := fmt.Sprintf("[%s] %s", rel.ID, detail.Title)
 		record := ReleaseRecord{
-			ID: rel.ID, URL: rel.URL, Thumbnail: rel.Thumbnail, RSSTitle: rssTitle,
+			ID: rel.ID, URL: rel.URL, Thumbnail: thumb, RSSTitle: rssTitle,
 			Detail: detail, Links: links, UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		pub := rel.ListingReleased
@@ -545,17 +558,109 @@ func (a *App) runPipeline(rec *RunRecord) error {
 	if len(out) == 0 {
 		return errors.New("no release could be processed; feed left untouched")
 	}
-	if err := a.writeFeed(out); err != nil {
+
+	// Merge this run's releases into the full archive instead of replacing
+	// it, so releases that have scrolled off Akiba-Web's listing page are
+	// never forgotten — only the current run's items get fresh data.
+	a.mu.Lock()
+	archive := make(map[string]ReleaseRecord, len(a.records)+len(out))
+	for _, r := range a.records {
+		archive[r.ID] = r
+	}
+	for _, r := range out {
+		archive[r.ID] = r
+	}
+	a.mu.Unlock()
+	merged := make([]ReleaseRecord, 0, len(archive))
+	for _, r := range archive {
+		merged = append(merged, r)
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].PubDate > merged[j].PubDate })
+
+	const maxFeedItems = 200
+	feedRecs := merged
+	if len(feedRecs) > maxFeedItems {
+		feedRecs = feedRecs[:maxFeedItems]
+	}
+	if err := a.writeFeed(feedRecs); err != nil {
 		a.log.Error("RSS write failed: %v", err)
 		return err
 	}
 	a.mu.Lock()
-	a.records = out
+	a.records = merged
 	a.lastFeed = time.Now()
 	a.mu.Unlock()
-	writeJSONFile(c.ReleasesFile, out)
-	a.log.Info("═══ Pipeline complete: %d items, %d downloads matched, RSS saved to %s ═══", len(out), len(matched), c.RSSFile)
+	writeJSONFile(c.ReleasesFile, merged)
+	a.log.Info("═══ Pipeline complete: %d items this run, %d in archive, %d downloads matched, RSS saved to %s ═══", len(out), len(merged), len(matched), c.RSSFile)
 	return nil
+}
+
+var coverClient = &http.Client{Timeout: 20 * time.Second}
+
+// cacheImage downloads url into the local cover cache (once) and returns a
+// "/covers/<file>" path to serve it from; on any failure, or if it is
+// already a locally cached path, the original url is returned unchanged so
+// the frontend always has something to point at.
+func (a *App) cacheImage(id, kind, url string) string {
+	if url == "" || a.coversDir == "" || strings.HasPrefix(url, "/covers/") {
+		return url
+	}
+	ext := filepath.Ext(strings.SplitN(url, "?", 2)[0])
+	if ext == "" || len(ext) > 5 {
+		ext = ".jpg"
+	}
+	name := sanitizeID(id) + "-" + kind + ext
+	path := filepath.Join(a.coversDir, name)
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+		return "/covers/" + name
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return url
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; AkibaWebRSS/1.0)")
+	resp, err := coverClient.Do(req)
+	if err != nil {
+		a.log.Warn("Cover download failed for %s (%s): %v", id, kind, err)
+		return url
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		a.log.Warn("Cover download failed for %s (%s): HTTP %d", id, kind, resp.StatusCode)
+		return url
+	}
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return url
+	}
+	_, cerr := io.Copy(f, resp.Body)
+	f.Close()
+	if cerr != nil {
+		os.Remove(tmp)
+		return url
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return url
+	}
+	return "/covers/" + name
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "id"
+	}
+	return b.String()
 }
 
 // deliver handles JD queueing + notification for one release (ported logic).

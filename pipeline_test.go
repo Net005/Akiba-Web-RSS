@@ -142,4 +142,78 @@ func TestPipelineEndToEnd(t *testing.T) {
 	if len(rv) != 2 || rv[0].ID != "SPSF-99" || rv[0].State != "waiting" {
 		t.Fatalf("%+v", rv)
 	}
+	found := false
+	for _, r := range rv {
+		if r.Thumbnail != "" {
+			found = true
+			if !strings.HasPrefix(r.Thumbnail, "/covers/") {
+				t.Fatalf("thumbnail not cached for %s: %q", r.ID, r.Thumbnail)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected at least one cached thumbnail")
+	}
+}
+
+// A release that scrolls off Akiba-Web's listing page must stay in the
+// archive (and thus the feed/UI) instead of being forgotten on the next run.
+func TestArchivedReleasesSurviveWhenTheyLeaveTheListing(t *testing.T) {
+	listingPath := int32(2) // start by serving both releases
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
+	mux.HandleFunc("/search/", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadInt32(&listingPath) == 2 {
+			fmt.Fprint(w, `<div class="search_sam_box"><a href="/product/index.php?product_id=1"><span>New</span></a> （SPSF-99） Release Day: 2026/09/20</div>
+			<div class="search_sam_box"><a href="/product/index.php?product_id=2"><span>Old</span></a> （SPSF-98） Release Day: 2026/08/01</div>`)
+			return
+		}
+		fmt.Fprint(w, `<div class="search_sam_box"><a href="/product/index.php?product_id=1"><span>New</span></a> （SPSF-99） Release Day: 2026/09/20</div>`)
+	})
+	mux.HandleFunc("/product/index.php", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<div id="works_pic"><h5>Title</h5><img src="/cover.jpg"></div><div id="works_txt"></div>`)
+	})
+	akiba := httptest.NewServer(mux)
+	defer akiba.Close()
+	forum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, pagerHTML(1, 1))
+	}))
+	defer forum.Close()
+
+	dir := t.TempDir()
+	b, _ := json.Marshal(map[string]any{
+		"akiba_base": akiba.URL, "forum_base": forum.URL, "forum_thread": "threads/t", "forum_pages": 1,
+		"forum_retries": 2, "port": 0,
+	})
+	os.WriteFile(filepath.Join(dir, "settings.json"), b, 0o600)
+	cs, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := NewHub(500)
+	log.out = &discard{}
+	app := NewApp(cs, log)
+
+	if !app.RunPipeline("first") {
+		t.Fatal("first run did not start")
+	}
+	if rv := app.Releases(); len(rv) != 2 {
+		t.Fatalf("expected 2 releases after first run, got %d: %+v", len(rv), rv)
+	}
+
+	atomic.StoreInt32(&listingPath, 1) // SPSF-98 drops off the listing
+	if !app.RunPipeline("second") {
+		t.Fatal("second run did not start")
+	}
+	rv := app.Releases()
+	if len(rv) != 2 {
+		t.Fatalf("archived release was dropped: expected 2, got %d: %+v", len(rv), rv)
+	}
+	ids := map[string]bool{}
+	for _, r := range rv {
+		ids[r.ID] = true
+	}
+	if !ids["SPSF-98"] || !ids["SPSF-99"] {
+		t.Fatalf("missing archived release: %+v", rv)
+	}
 }

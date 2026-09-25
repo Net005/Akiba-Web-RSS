@@ -60,6 +60,15 @@ panel's Settings page and stored in `data/settings.json`.
   one is created automatically (a corrupt file is preserved alongside it as
   `.scraper_state.json.corrupt-<timestamp>`); this is never a startup
   failure.
+* **Release archive:** `releases.json` accumulates every release ever seen,
+  not just what's currently on Akiba-Web's listing page — each run merges
+  fresh data for whatever is listed today into the archive instead of
+  replacing it, so older releases stay in the panel and the feed (the RSS
+  feed itself is capped to the newest 200 for size). Cover and thumbnail
+  images are downloaded once into `data/covers/` and served locally at
+  `/covers/...` (also public, since they're embedded in the feed), so the
+  panel and feed keep working even if Akiba-Web or giga-web.jp later removes
+  the originals.
 
 ## Control panel
 
