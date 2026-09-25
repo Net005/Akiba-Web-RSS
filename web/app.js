@@ -186,7 +186,7 @@ function renderReleases() {
     return `<div class="tile" data-id="${esc(r.id)}">
       <div class="cv" style="background-image:url('${esc(relCover(r))}')"></div>
       <div class="tb">
-        <div class="tt">${esc(relTitle(r))}</div>
+        <div class="tt"><span class="relid">${esc(r.id)}</span>${esc(relTitle(r))}</div>
         <div class="tm"><span class="tag st-${esc(r.state)}">${esc(r.state)}</span><span>${r.links_queued||0}/${r.links_total||0} links</span></div>
         <div class="bar"><div style="width:${pct}%"></div></div>
       </div>
@@ -221,7 +221,7 @@ function openReleaseModal(r) {
     ['Found', esc(fmtDT(r.pub_date))],
     ['Notified', r.notified_at ? esc(fmtDT(r.notified_at)) : 'not yet'],
   ];
-  $('#mTitle').textContent = relTitle(r);
+  $('#mTitle').innerHTML = `<span class="relid">${esc(r.id)}</span>${esc(relTitle(r))}`;
   $('#modalBox').classList.add('wide');
   $('#mBody').innerHTML = `
     <div class="rd-top">

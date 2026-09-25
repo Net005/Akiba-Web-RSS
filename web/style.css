@@ -126,6 +126,8 @@ td .st-ok{color:var(--ok)}td .st-error,td .st-false{color:var(--err)}td .st-warn
 .tile .cv .bad{position:absolute;left:6px;top:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;color:#fff}
 .tile .tb{padding:9px 11px}
 .tile .tt{font-weight:600;color:#fff;font-size:13px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:34px}
+.relid{display:inline-block;font:700 10px/1.5 "JetBrains Mono",Consolas,Menlo,monospace;color:var(--gold);background:rgba(233,195,155,.12);border:1px solid rgba(233,195,155,.35);border-radius:3px;padding:0 5px;letter-spacing:.4px;margin-right:6px;vertical-align:1px}
+.tile .tt .relid{margin-right:5px}
 .tile .tm{margin-top:6px;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
 .tile .bar{height:4px;margin-top:7px}
 .empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:50px 0}
