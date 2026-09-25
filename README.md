@@ -1,148 +1,116 @@
-# Akiba-Web RSS Server
+# Akiba-Web RSS Control
 
-This service scrapes Akiba-Web releases, matches their Keep2Share links from the
-configured forum thread, adds new links to MyJDownloader, and publishes an RSS
-feed. It can also send one Pushover message per release successfully added to
-JDownloader.
-
-## Configuration
-
-All settings are read from `config.json` in the same directory as
-`akiba_rss_server.py`. Relative file paths are resolved from that directory.
-Restart the service after changing the configuration.
-
-```json
-{
-  "myjd_email": "name@example.com",
-  "myjd_password": "your-myjd-password",
-  "pushover_destinations": [
-    {
-      "api_token": "your-pushover-application-api-token",
-      "user_key": "first-user-or-group-key",
-      "include_sensitive_data": false
-    },
-    {
-      "api_token": "your-pushover-application-api-token",
-      "user_key": "second-user-or-group-key",
-      "include_sensitive_data": true
-    }
-  ],
-  "akiba_base": "https://www.akiba-web.com",
-  "akiba_releases_path": "/search/?narrow=2&sort=1",
-  "forum_base": "https://vipergirls.to",
-  "forum_thread": "threads/5913172-Heroine-superheroine-JAV-movie-collection",
-  "forum_pages": 3,
-  "port": 5050,
-  "schedule_interval": 3600,
-  "rss_file": "feed.rss",
-  "state_file": ".scraper_state.json",
-  "log_file": "scraper.log"
-}
-```
-
-### Pushover
-
-Create a Pushover application to obtain an application API token, then add one
-object per destination to `pushover_destinations`. A destination's `user_key`
-may be a user key or a delivery group key. The application API token may be
-reused when all destinations use the same Pushover application.
-
-For example, if the application token is `azGDORePK8gMaW8It92cA6m9p12345` and the
-two destination keys are `uQiRzpo4DXghDmr9QzzfQu27cmVRsG` and
-`gznej3rKEVAvPUxu9vvNnqpmZpokzF`, the exact configuration is:
-
-```json
-"pushover_destinations": [
-  {
-    "api_token": "azGDORePK8gMaW8It92cA6m9p12345",
-    "user_key": "uQiRzpo4DXghDmr9QzzfQu27cmVRsG",
-    "include_sensitive_data": false
-  },
-  {
-    "api_token": "azGDORePK8gMaW8It92cA6m9p12345",
-    "user_key": "gznej3rKEVAvPUxu9vvNnqpmZpokzF",
-    "include_sensitive_data": true
-  }
-]
-```
-
-These are example values only. Replace them with the application token and
-user/group keys displayed in your Pushover account.
-
-`include_sensitive_data` controls the content independently for each
-destination:
-
-- `false` sends only `New AW release found`.
-- `true` uses the RSS item title as the notification title, the release story
-  as the message, uploads the release's main cover as the image attachment, and
-  adds a `View on Akiba-Web` link to the product page.
-
-Pushover limits titles to 250 UTF-8 bytes, messages to 1,024 UTF-8 bytes, and
-attachments to 5 MiB. Longer RSS content is safely truncated to those mandatory
-limits. If Akiba-Web provides no story, the message says `Story unavailable`.
-
-To disable Pushover, use an empty list:
-
-```json
-"pushover_destinations": []
-```
-
-After at least one link for a new release is successfully queued in JD, every
-configured destination receives this exact message:
-
-```text
-New AW release found
-```
-
-Successful deliveries are recorded in `state_file`. If one destination fails,
-only that destination is retried on a later pipeline run; successful
-destinations are not sent the same release again. Do not manually remove the
-notification entries from the state file unless you intentionally want to
-allow them to be sent again.
-
-Successful JD additions are tracked by exact link, while release IDs record
-completion and notification history. JDownloader's own LinkCollector duplicate
-manager remains authoritative for detecting equivalent or changed URLs already
-in its download list. Pipeline runs are serialized, so simultaneous scheduler
-and HTTP refresh requests cannot overwrite each other's state.
-
-When MyJDownloader explicitly reports a link as duplicate or already present,
-the scraper records that URL as successful in `found_links`. It will not retry
-the duplicate on later runs, and the log states that it was marked successful.
-
-Values in `queued_releases` are ISO 8601 timestamps. When upgrading a legacy
-state file that only tracked links, its file modification time is used as the
-best available approximate timestamp for migrated releases.
-
-### Other settings
-
-- `myjd_email` and `myjd_password`: MyJDownloader account credentials.
-- `akiba_base` and `akiba_releases_path`: Akiba-Web host and release listing.
-- `forum_base` and `forum_thread`: forum host and thread containing download
-  links.
-- `forum_pages`: number of latest thread pages to inspect.
-- `port`: local HTTP port used by the Flask server.
-- `schedule_interval`: seconds between automatic pipeline runs.
-- `rss_file`: generated RSS output path.
-- `state_file`: persistent JD-link and Pushover-delivery state.
-- `log_file`: rotating application log path.
-
-Keep `config.json` private because it contains account and API credentials.
-The server refuses to start when this file contains invalid JSON, preventing a
-configuration typo from silently disabling MyJDownloader or Pushover. You can
-validate it before restarting with:
-
-```sh
-python -m json.tool config.json > /dev/null
-```
+A pure Go service that scrapes [akiba-web.com](https://www.akiba-web.com) GIGA
+superheroine releases, matches their Keep2Share download links from a
+configured vipergirls.to forum thread, queues new links in MyJDownloader,
+sends Pushover notifications, and publishes an RSS feed — with a themed,
+dense ops-console web control panel and live log built in. No Python, no
+external dependencies beyond the Go modules in `go.sum`; the web UI is
+embedded in the binary.
 
 ## Run
 
-Install dependencies and start the server:
-
 ```sh
-python -m pip install -r requirements.txt
-python akiba_rss_server.py
+chmod +x akiba-web-rss-linux-amd64
+./akiba-web-rss-linux-amd64 -data ./data     # then open http://<host>:5000/
 ```
 
-The RSS feed is available at `/giga/feed`, and service status at `/health`.
+`-data` is the folder for `settings.json`, `auth.json`, the state file, feed
+and logs (the `AKIBA_DATA` env var works too). A systemd user unit is included
+(`akiba-web-rss.service`). Rebuild from source with Go 1.25+:
+
+```sh
+CGO_ENABLED=0 go build -o akiba-web-rss .
+```
+
+## Docker
+
+```sh
+docker compose up -d
+docker compose logs -f      # first run: look for the FIRST-RUN SETUP line with your setup code
+```
+
+Everything lives in the `./data` volume (uid/gid 1000 — `chown -R 1000:1000 data`).
+Images are published to `ghcr.io/net005/akiba-web-rss` by GitHub Actions
+(`.github/workflows/docker.yml`, multi-arch: linux/amd64, linux/arm64).
+
+## First run, login and settings
+
+There is no `config.json` any more — all configuration is edited in the web
+panel's Settings page and stored in `data/settings.json`.
+
+* **Existing `config.json`:** if `data/config.json` exists and there is no
+  `settings.json` yet, it is imported automatically on startup and renamed to
+  `config.json.imported`. An invalid file is left completely untouched and
+  reported in the log rather than risk losing it.
+* **Account:** sign in with a normal form — no browser/OS-style Basic Auth
+  popup. On first run, open `/setup`, enter the one-time **setup code printed
+  in the server log**, and choose a username + password (bcrypt-hashed in
+  `auth.json`). A `web_user`/`web_password` found in an imported config
+  becomes that account automatically.
+* **Sessions:** HttpOnly + SameSite=Lax cookie (Secure when served over
+  HTTPS); 30 days if "keep me signed in", otherwise 12h. Failed logins are
+  throttled per IP with exponential backoff. Changing the password signs out
+  every other session.
+* **RSS feed needs no login:** `/giga/feed`, `/giga/feed/raw` and `/health`
+  are always public. Everything else — the panel, the JSON API, and the
+  legacy `/giga/feed/refresh` and `/giga/feed/realtime` endpoints — requires a
+  session.
+* **State file:** if `.scraper_state.json` is missing or unreadable, a fresh
+  one is created automatically (a corrupt file is preserved alongside it as
+  `.scraper_state.json.corrupt-<timestamp>`); this is never a startup
+  failure.
+
+## Control panel
+
+| Page | What it does |
+|------|--------------|
+| Dashboard | live pipeline phase + progress bar, current item, stat tiles, mini log, connection summary, feed URL, Run / Stop |
+| Live Log | real-time stream (SSE), level filters, text search, pause, follow, wrap, download, clear |
+| Releases | every tracked release as a full-bleed cover-art tile, link/queue progress, per-release "Send to JD", re-notify and forget |
+| Run History | every pipeline run — result, releases found, matched, links queued, notifications sent, duration |
+| System | MyJDownloader devices + reconnect, Pushover destination count, public endpoint reference, list of every known download link |
+| Settings | every configuration field plus the account password, all in the browser (secrets are masked in API responses) |
+
+Extra settings beyond the essentials: `listen_host`, `public_base_url`,
+`forum_retries`, `releases_file`, `history_file`. `schedule_interval` and the
+MyJDownloader credentials apply immediately on save; `port` and `listen_host`
+need a restart.
+
+### Pushover
+
+Add one destination per notification target in Settings. Each destination has
+its own API token, user/group key, and an "include sensitive data" toggle:
+
+* off — sends only `New AW release found`.
+* on — uses the release title, story, cover image and a link to the product
+  page.
+
+Pushover limits titles to 250 UTF-8 bytes, messages to 1,024 UTF-8 bytes, and
+attachments to 5 MiB; longer content is truncated safely. Deliveries are
+tracked per release per destination in the state file, so a failed
+destination is retried on the next run without re-notifying destinations that
+already succeeded.
+
+## The forum "Connection reset by peer" bug
+
+Old behaviour: page-discovery failed → the code assumed the thread had a
+single page → it scraped page 1 (the oldest) → new releases never matched,
+silently.
+
+Now: every forum request is retried with exponential backoff on a fresh
+connection; discovery has a second strategy (request an out-of-range page)
+and probes forward from the last known page; the last known thread length is
+persisted in the state file (`forum_max_page`). If nothing is known, the
+forum step is skipped with an explicit error and previously known links stay
+in the feed. Covered by `forum_test.go` (`go test ./...`).
+
+## The Akiba-Web listing "failed to locate .search_sam_box" bug
+
+`akiba-web.com`'s age-gate endpoint clears the pre-gate session cookie with a
+domain-scoped `Set-Cookie: PHPSESSID=deleted`. Go's `net/http/cookiejar`
+honors that delete strictly and drops the real session, so the listing page
+falls back to the age-gate HTML (still HTTP 200) with no releases to parse.
+Fixed with a cookie-jar wrapper that ignores that specific deletion, plus a
+defensive retry-with-reprime if a fetch still comes back empty. Covered by the
+opt-in live test in `live_test.go` (`LIVE=1 go test -run TestLiveAkiba -v`).
